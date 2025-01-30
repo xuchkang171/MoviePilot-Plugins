@@ -355,8 +355,8 @@
         "description": "根据设定的时间段自动调整下载器速度限制。",
         "labels": "下载管理,qBittorrent",
         "version": "1.0",
-        "icon": "speedlimit.png",
-        "author": "your_name",
+        "icon": "Librespeed_A.png",
+        "author": "Frank Xu",
         "level": 1,
         "history": {
             "v1.0": "首次发布，支持通过CRON表达式配置不同时段的速度限制"
