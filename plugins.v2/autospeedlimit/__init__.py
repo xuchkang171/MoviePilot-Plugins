@@ -17,7 +17,7 @@ class AutoSpeedLimit(PluginBase):
     # 插件描述
     plugin_desc = "根据设定的时间段自动调整下载器速度限制。"
     # 插件图标
-    plugin_icon = "speedlimit.png"
+    plugin_icon = "Librespeed_A.png"
     # 主题色
     plugin_color = "#ff9800"
     # 插件版本
