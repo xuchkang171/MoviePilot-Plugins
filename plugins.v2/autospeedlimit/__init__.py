@@ -1,6 +1,11 @@
 import datetime
 from typing import Any, List, Dict, Optional
-from croniter import croniter
+try:
+    from croniter import croniter
+except ImportError:
+    # Add fallback if croniter is not installed
+    croniter = None
+    
 
 from app.core.config import settings
 from app.core.event import eventmanager, Event
@@ -43,9 +48,23 @@ class AutoSpeedLimit(PluginBase):
     _downloader_name = None
 
     def init_plugin(self, config: dict = None):
-        self._enabled = config.get("enabled")
+        if not config:
+            config = {}
+            
+        self._enabled = config.get("enabled", False)
         if not self._enabled:
             logger.info("插件未启用")
+            return
+            
+        # 检查croniter是否可用
+        if croniter is None:
+            logger.error("未安装croniter库，插件无法正常工作")
+            self._enabled = False
+            self.post_message(
+                mtype=NotificationType.SiteMessage,
+                title="下载器自动限速",
+                text="未安装croniter库，请在MoviePilot目录下运行: pip install croniter"
+            )
             return
         
         # 初始化下载器助手
@@ -58,9 +77,24 @@ class AutoSpeedLimit(PluginBase):
             return
             
         # 获取速度规则配置
-        self._speed_rules = config.get("speed_rules", [])
-        if not self._speed_rules:
+        rules = config.get("speed_rules")
+        if not rules:
             logger.error("未配置速度规则")
+            return
+            
+        # 如果是字符串，尝试解析JSON
+        if isinstance(rules, str):
+            try:
+                import json
+                self._speed_rules = json.loads(rules)
+            except Exception as e:
+                logger.error(f"解析速度规则出错: {str(e)}")
+                return
+        else:
+            self._speed_rules = rules
+            
+        if not self._speed_rules:
+            logger.error("速度规则为空")
             return
         
         logger.info("插件初始化完成")
@@ -116,7 +150,7 @@ class AutoSpeedLimit(PluginBase):
                     "value": name
                 })
         except Exception as e:
-            print(f"获取下载器列表出错: {str(e)}")
+            logger.error(f"获取下载器列表出错: {str(e)}")
 
         return [
             {
@@ -181,16 +215,16 @@ class AutoSpeedLimit(PluginBase):
                 iter = croniter(rule.get("cron"), now)
                 next_time = iter.get_next(datetime.datetime)
                 next_times.append(next_time)
-                logger.debug(f"【{self.plugin_name}】规则 {rule.get('cron')} 下次触发时间: {next_time}")
+                logger.debug(f"规则 {rule.get('cron')} 下次触发时间: {next_time}")
             except Exception as e:
-                logger.error(f"【{self.plugin_name}】解析cron表达式出错: {str(e)}")
+                logger.error(f"解析cron表达式出错: {str(e)}")
                 
         if not next_times:
             return None
             
         # 返回最近的下一个时间点
         next_time = min(next_times)
-        logger.info(f"【{self.plugin_name}】下次执行时间: {next_time}")
+        logger.info(f"下次执行时间: {next_time}")
         return next_time
 
     def _get_current_rule(self) -> Optional[Dict]:
@@ -209,17 +243,17 @@ class AutoSpeedLimit(PluginBase):
                 next_dt = iter.get_next(datetime.datetime)
                 if prev_dt <= now <= next_dt:
                     matching_rules.append((rule, prev_dt))
-                    logger.debug(f"【{self.plugin_name}】找到匹配规则: {rule}")
+                    logger.debug(f"找到匹配规则: {rule}")
             except Exception as e:
-                logger.error(f"【{self.plugin_name}】解析cron表达式出错: {str(e)}")
+                logger.error(f"解析cron表达式出错: {str(e)}")
                 
         if not matching_rules:
-            logger.info(f"【{self.plugin_name}】当前无匹配规则")
+            logger.info(f"当前无匹配规则")
             return None
             
         # 如果多个规则匹配，使用最后生效的规则
         rule = max(matching_rules, key=lambda x: x[1])[0]
-        logger.info(f"【{self.plugin_name}】当前使用规则: {rule}")
+        logger.info(f"当前使用规则: {rule}")
         return rule
 
     def check_and_set_speed_limit(self):
@@ -236,11 +270,11 @@ class AutoSpeedLimit(PluginBase):
         # 获取下载器实例
         downloader = self._downloaderhelper.get_service(name=self._downloader_name)
         if not downloader or not downloader.instance:
-            logger.error(f"【{self.plugin_name}】获取下载器实例失败")
+            logger.error(f"获取下载器实例失败")
             return
         
         if not self._downloaderhelper.is_downloader(service_type="qbittorrent", service=downloader):
-            logger.error(f"【{self.plugin_name}】下载器类型不是qBittorrent")
+            logger.error(f"下载器类型不是qBittorrent")
             return
 
         try:
@@ -249,25 +283,25 @@ class AutoSpeedLimit(PluginBase):
             download_limit = current_rule.get("download_limit", -1)
             
             # 转换到KB/s，-1保持不变表示不限速
-            upload_limit = upload_limit * 1024 if upload_limit >= 0 else -1
-            download_limit = download_limit * 1024 if download_limit >= 0 else -1
+            upload_limit_kb = upload_limit * 1024 if upload_limit >= 0 else -1
+            download_limit_kb = download_limit * 1024 if download_limit >= 0 else -1
             
             # 设置限速
             client = downloader.instance
             client.set_speed_limit(
-                upload_limit=upload_limit,
-                download_limit=download_limit
+                upload_limit=upload_limit_kb,
+                download_limit=download_limit_kb
             )
             
             # 发送通知，显示速度时转换回MB/s
-            upload_text = f"{upload_limit/1024:.1f}MB/s" if upload_limit >= 0 else "不限速"
-            download_text = f"{download_limit/1024:.1f}MB/s" if download_limit >= 0 else "不限速"
+            upload_text = f"{upload_limit}MB/s" if upload_limit >= 0 else "不限速"
+            download_text = f"{download_limit}MB/s" if download_limit >= 0 else "不限速"
             
-            logger.info(f"【{self.plugin_name}】设置限速成功 - 上传: {upload_text}, 下载: {download_text}")
+            logger.info(f"设置限速成功 - 上传: {upload_text}, 下载: {download_text}")
             
             self.post_message(
                 mtype=NotificationType.SiteMessage,
-                title=f"【{self.plugin_name}】",
+                title="下载器自动限速",
                 text=f"已设置上传限速: {upload_text}, "
                      f"下载限速: {download_text}"
             )
@@ -282,10 +316,10 @@ class AutoSpeedLimit(PluginBase):
                 month = next_time.month
                 dow = next_time.weekday()
                 self._cron = f"{minute} {hour} {day} {month} {dow}"
-                logger.info(f"【{self.plugin_name}】设置下次执行cron: {self._cron}")
+                logger.info(f"设置下次执行cron: {self._cron}")
                 
         except Exception as e:
-            logger.error(f"【{self.plugin_name}】设置速度限制出错: {str(e)}")
+            logger.error(f"设置速度限制出错: {str(e)}")
 
     @eventmanager.register(EventType.PluginAction)
     def handle_action(self, event: Event):
@@ -302,16 +336,23 @@ class AutoSpeedLimit(PluginBase):
         # 获取当前状态
         state = self.get_current_state()
         if state.get("code") == 0 and state.get("data"):
+            upload_limit = state['data']['upload_limit']
+            download_limit = state['data']['download_limit']
+            
+            # 显示友好的速度值
+            upload_text = f"{upload_limit}MB/s" if upload_limit >= 0 else "不限速"
+            download_text = f"{download_limit}MB/s" if download_limit >= 0 else "不限速"
+            
             self.post_message(
                 mtype=NotificationType.SiteMessage,
-                title="【下载器自动限速】",
-                text=f"当前上传限速: {state['data']['upload_limit']}KB/s, "
-                     f"下载限速: {state['data']['download_limit']}KB/s"
+                title="下载器自动限速",
+                text=f"当前上传限速: {upload_text}, "
+                     f"下载限速: {download_text}"
             )
         else:
             self.post_message(
                 mtype=NotificationType.SiteMessage,
-                title="【下载器自动限速】",
+                title="下载器自动限速",
                 text=state.get("msg", "获取状态失败")
             )
 
